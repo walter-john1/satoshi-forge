@@ -199,3 +199,99 @@
     (protocol-id uint)
     (active bool)
   )
+  (begin
+    (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+    (asserts! (is-valid-protocol-id protocol-id) ERR-INVALID-PROTOCOL-ID)
+    (asserts! (protocol-exists protocol-id) ERR-INVALID-PROTOCOL-ID)
+
+    (let ((protocol (unwrap-panic (get-protocol protocol-id))))
+      (map-set protocols { protocol-id: protocol-id }
+        (merge protocol { active: active })
+      )
+    )
+    (ok true)
+  )
+)
+
+(define-public (update-protocol-apy
+    (protocol-id uint)
+    (new-apy uint)
+  )
+  (begin
+    (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+    (asserts! (is-valid-protocol-id protocol-id) ERR-INVALID-PROTOCOL-ID)
+    (asserts! (protocol-exists protocol-id) ERR-INVALID-PROTOCOL-ID)
+    (asserts! (is-valid-apy new-apy) ERR-INVALID-APY)
+
+    (let ((protocol (unwrap-panic (get-protocol protocol-id))))
+      (map-set protocols { protocol-id: protocol-id }
+        (merge protocol { apy: new-apy })
+      )
+    )
+    (ok true)
+  )
+)
+
+;; Token Management
+
+(define-private (validate-token (token-trait <sip-010-trait>))
+  (let (
+      (token-contract (contract-of token-trait))
+      (token-info (map-get? whitelisted-tokens { token: token-contract }))
+    )
+    (asserts! (is-some token-info) ERR-TOKEN-NOT-WHITELISTED)
+    (asserts! (get approved (unwrap-panic token-info))
+      ERR-PROTOCOL-NOT-WHITELISTED
+    )
+    (ok true)
+  )
+)
+
+(define-public (whitelist-token (token principal))
+  (begin
+    (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+    (map-set whitelisted-tokens { token: token } { approved: true })
+    (ok true)
+  )
+)
+
+;; Transfer Helper
+
+(define-private (safe-token-transfer
+    (token-trait <sip-010-trait>)
+    (amount uint)
+    (sender principal)
+    (recipient principal)
+  )
+  (begin
+    (try! (validate-token token-trait))
+    (contract-call? token-trait transfer amount sender recipient none)
+  )
+)
+
+;; Allocation & Rebalancing
+
+(define-private (rebalance-protocols)
+  (let ((total-allocations (fold + (map get-protocol-allocation (get-protocol-list)) u0)))
+    (asserts! (<= total-allocations u10000) ERR-INVALID-AMOUNT)
+    (ok true)
+  )
+)
+
+(define-private (get-weighted-apy)
+  (fold + (map get-weighted-protocol-apy (get-protocol-list)) u0)
+)
+
+(define-private (get-weighted-protocol-apy (protocol-id uint))
+  (let (
+      (protocol (unwrap-panic (get-protocol protocol-id)))
+      (allocation (get allocation
+        (unwrap-panic (map-get? strategy-allocations { protocol-id: protocol-id }))
+      ))
+    )
+    (if (get active protocol)
+      (/ (* (get apy protocol) allocation) u10000)
+      u0
+    )
+  )
+)
