@@ -99,3 +99,103 @@
     ()
     (response uint uint)
   )
+  (get-name
+    ()
+    (response (string-ascii 32) uint)
+  )
+  (get-symbol
+    ()
+    (response (string-ascii 32) uint)
+  )
+  (get-total-supply
+    ()
+    (response uint uint)
+  )
+))
+
+;; Read-Only Functions (moved here to be available for other functions)
+
+(define-read-only (get-protocol (protocol-id uint))
+  (map-get? protocols { protocol-id: protocol-id })
+)
+
+(define-read-only (get-user-deposit (user principal))
+  (map-get? user-deposits { user: user })
+)
+
+(define-read-only (get-total-tvl)
+  (var-get total-tvl)
+)
+
+(define-read-only (is-whitelisted (token <sip-010-trait>))
+  (default-to false
+    (get approved (map-get? whitelisted-tokens { token: (contract-of token) }))
+  )
+)
+
+;; Private Helper Functions
+
+(define-private (get-protocol-list)
+  (list u1 u2 u3 u4 u5)
+)
+
+(define-private (get-protocol-allocation (protocol-id uint))
+  (get allocation
+    (default-to { allocation: u0 }
+      (map-get? strategy-allocations { protocol-id: protocol-id })
+    ))
+)
+
+;; Access Control
+
+(define-private (is-contract-owner)
+  (is-eq tx-sender contract-owner)
+)
+
+;; Validation Helpers
+
+(define-private (is-valid-protocol-id (protocol-id uint))
+  (and (> protocol-id u0) (<= protocol-id MAX-PROTOCOL-ID))
+)
+
+(define-private (is-valid-apy (apy uint))
+  (and (>= apy MIN-APY) (<= apy MAX-APY))
+)
+
+(define-private (is-valid-name (name (string-ascii 64)))
+  (and (not (is-eq name "")) (<= (len name) u64))
+)
+
+(define-private (protocol-exists (protocol-id uint))
+  (is-some (map-get? protocols { protocol-id: protocol-id }))
+)
+
+;; Protocol Management
+
+(define-public (add-protocol
+    (protocol-id uint)
+    (name (string-ascii 64))
+    (initial-apy uint)
+  )
+  (begin
+    (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+    (asserts! (is-valid-protocol-id protocol-id) ERR-INVALID-PROTOCOL-ID)
+    (asserts! (not (protocol-exists protocol-id)) ERR-PROTOCOL-EXISTS)
+    (asserts! (is-valid-name name) ERR-INVALID-NAME)
+    (asserts! (is-valid-apy initial-apy) ERR-INVALID-APY)
+
+    (map-set protocols { protocol-id: protocol-id } {
+      name: name,
+      active: PROTOCOL-ACTIVE,
+      apy: initial-apy,
+    })
+
+    (map-set strategy-allocations { protocol-id: protocol-id } { allocation: u0 })
+    (ok true)
+  )
+)
+
+(define-public (update-protocol-status
+    (protocol-id uint)
+    (active bool)
+  )
