@@ -295,3 +295,133 @@
     )
   )
 )
+
+;; Rewards and APY Calculation
+
+(define-private (calculate-rewards
+    (user principal)
+    (blocks uint)
+  )
+  (let (
+      (user-deposit (unwrap-panic (get-user-deposit user)))
+      (weighted-apy (get-weighted-apy))
+    )
+    (/ (* (get amount user-deposit) weighted-apy blocks) (* u10000 u144 u365))
+  )
+)
+
+(define-public (claim-rewards (token-trait <sip-010-trait>))
+  (let (
+      (user-principal tx-sender)
+      (rewards (calculate-rewards user-principal
+        (- stacks-block-height
+          (get last-deposit-block
+            (unwrap-panic (get-user-deposit user-principal))
+          ))
+      ))
+    )
+    (try! (validate-token token-trait))
+    (asserts! (> rewards u0) ERR-INVALID-AMOUNT)
+
+    (map-set user-rewards { user: user-principal } {
+      pending: u0,
+      claimed: (+ rewards
+        (get claimed
+          (default-to {
+            pending: u0,
+            claimed: u0,
+          }
+            (map-get? user-rewards { user: user-principal })
+          ))
+      ),
+    })
+
+    (as-contract (try! (contract-call? token-trait transfer rewards tx-sender user-principal none)))
+    (ok rewards)
+  )
+)
+
+;; Deposit / Withdraw Lifecycle
+
+(define-public (deposit
+    (token-trait <sip-010-trait>)
+    (amount uint)
+  )
+  (let (
+      (user-principal tx-sender)
+      (current-deposit (default-to {
+        amount: u0,
+        last-deposit-block: u0,
+      }
+        (map-get? user-deposits { user: user-principal })
+      ))
+    )
+    (try! (validate-token token-trait))
+    (asserts! (not (var-get emergency-shutdown)) ERR-STRATEGY-DISABLED)
+    (asserts! (>= amount (var-get min-deposit)) ERR-MIN-DEPOSIT-NOT-MET)
+    (asserts! (<= (+ amount (get amount current-deposit)) (var-get max-deposit))
+      ERR-MAX-DEPOSIT-REACHED
+    )
+
+    (try! (safe-token-transfer token-trait amount user-principal
+      (as-contract tx-sender)
+    ))
+
+    (map-set user-deposits { user: user-principal } {
+      amount: (+ amount (get amount current-deposit)),
+      last-deposit-block: stacks-block-height,
+    })
+
+    (var-set total-tvl (+ (var-get total-tvl) amount))
+
+    (try! (rebalance-protocols))
+    (ok true)
+  )
+)
+
+(define-public (withdraw
+    (token-trait <sip-010-trait>)
+    (amount uint)
+  )
+  (let (
+      (user-principal tx-sender)
+      (current-deposit (default-to {
+        amount: u0,
+        last-deposit-block: u0,
+      }
+        (map-get? user-deposits { user: user-principal })
+      ))
+    )
+    (try! (validate-token token-trait))
+    (asserts! (<= amount (get amount current-deposit)) ERR-INSUFFICIENT-BALANCE)
+
+    (map-set user-deposits { user: user-principal } {
+      amount: (- (get amount current-deposit) amount),
+      last-deposit-block: (get last-deposit-block current-deposit),
+    })
+
+    (var-set total-tvl (- (var-get total-tvl) amount))
+
+    (as-contract (try! (safe-token-transfer token-trait amount tx-sender user-principal)))
+    (ok true)
+  )
+)
+
+;; Admin Functions
+
+(define-public (set-platform-fee (new-fee uint))
+  (begin
+    (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+    (asserts! (<= new-fee u1000) ERR-INVALID-AMOUNT)
+    (var-set platform-fee-rate new-fee)
+    (ok true)
+  )
+)
+
+(define-public (set-emergency-shutdown (shutdown bool))
+  (begin
+    (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
+    (var-set emergency-shutdown shutdown)
+    (ok true)
+  )
+)
